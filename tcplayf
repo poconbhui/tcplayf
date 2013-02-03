@@ -1,0 +1,39 @@
+#!/bin/bash
+
+
+# parse command line arguments
+case "$1" in
+
+  # mount mode takes 2 arguments: tcplayf mount tc_volume mount_directory
+  'mount') mode='mount'
+    tc_volume=`readlink -f $2`
+    mount_directory=`readlink -f $3`
+
+    loop=`sudo losetup -f`
+    tc_volume_name=`basename $tc_volume`
+    
+    sudo losetup $loop $tc_volume &&
+    sudo tcplay --map=$tc_volume_name --device=$loop &&
+    sudo mount /dev/mapper/$tc_volume_name $mount_directory
+    ;;
+
+  # unmount takes 1 argument: the directory the tc_volume has been mounted to
+  'unmount') mode='unmount'
+    #find tcplay volume name, attached loop and mount directory
+    mount_data=`sudo mount -l | grep $(readlink -f $2)`
+    tc_map=`echo "$mount_data" | sed 's/^\([^ ]*\) on .*/\1/'`
+    tc_volume_name=`basename $tc_map`
+    loop=`losetup -a | grep "$tc_volume_name" | sed 's/^\([^ :]*\).*/\1/'`
+    mount_directory=`echo "$mount_data" | sed 's/^[^ ]* on \([^ ]*\) .*/\1/'`
+
+    #check if mount directory is currently in use
+    lsof | grep "$mount_directory/" && echo "Directory busy, exiting" && exit
+
+    #perform inverse operations of mount
+    sudo umount "$mount_directory" &&
+    sudo cryptsetup remove "$tc_volume_name" &&
+    sudo losetup -d "$loop" &&
+      echo Unmount successful ||
+      echo Unmount failed
+    ;;
+esac
