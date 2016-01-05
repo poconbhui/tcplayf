@@ -10,8 +10,9 @@ case "$1" in
     mount_directory=`readlink -f $3`
 
     loop=`sudo losetup -f`
-    tc_volume_name=`basename $tc_volume`
-    
+    tc_md5=`echo $tc_volume | md5sum | sed 's/ .*//'`
+    tc_volume_name=`basename $tc_volume`.$tc_md5
+
     sudo losetup $loop $tc_volume &&
     sudo tcplay --map=$tc_volume_name --device=$loop &&
     sudo mount /dev/mapper/$tc_volume_name $mount_directory
@@ -20,20 +21,37 @@ case "$1" in
   # unmount takes 1 argument: the directory the tc_volume has been mounted to
   'unmount') mode='unmount'
     #find tcplay volume name, attached loop and mount directory
-    mount_data=`sudo mount -l | grep $(readlink -f $2)`
-    tc_map=`echo "$mount_data" | sed 's/^\([^ ]*\) on .*/\1/'`
+    tc_dir=$(readlink -f $2)
+    tc_map=`sudo findmnt $tc_dir -o SOURCE -n`
     tc_volume_name=`basename $tc_map`
-    loop=`losetup -a | grep "$tc_volume_name" | sed 's/^\([^ :]*\).*/\1/'`
-    mount_directory=`echo "$mount_data" | sed 's/^[^ ]* on \([^ ]*\) .*/\1/'`
 
-    #check if mount directory is currently in use
-    lsof | grep "$mount_directory/" && echo "Directory busy, exiting" && exit
+    # Find correct loop
+    file_basename=`echo $tc_volume_name | sed 's/\.[[:alnum:]]*$//'`
+    file_md5=`echo $tc_volume_name | sed 's/^.*\.\([[:alnum:]]*\)$/\1/'`
 
-    #perform inverse operations of mount
-    sudo umount "$mount_directory" &&
-    sudo cryptsetup remove "$tc_volume_name" &&
-    sudo losetup -d "$loop" &&
-      echo Unmount successful ||
-      echo Unmount failed
+    loop_files=`losetup -l -O BACK-FILE -n`
+    IFS=$'\n'
+    for loop_file in $loop_files; do
+
+        # Check if full path matches the mapped file
+        loop_md5=`echo $loop_file | md5sum | sed 's/ .*$//'`
+        if [[ $loop_md5 != $file_md5 ]]; then
+            continue
+        fi
+
+        loop=`losetup -l -O NAME -n -j "$loop_file"`
+
+        #check if mount directory is currently in use
+        lsof -Fn | grep -q -x "n$tc_dir/\?" &&
+            echo "Directory busy, exiting" &&
+            exit
+
+        #perform inverse operations of mount
+        sudo umount "$tc_dir" &&
+        sudo cryptsetup remove "$tc_volume_name" &&
+        sudo losetup -d "$loop" &&
+          echo Unmount successful ||
+          echo Unmount failed
+    done
     ;;
 esac
